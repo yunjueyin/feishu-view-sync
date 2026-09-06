@@ -349,7 +349,13 @@ function setProgress(p) { $('progressBar').style.width = p + '%'; }
 
 // —— 同文件（SDK 直写，免密钥） ——
 async function runSame(payload) {
-  const t = await state.bitable.base.getTableById($('sameTable').value);
+  // 引擎内最后一道闸（不依赖上游校验）：目标绝不可能是当前源数据表，
+  // 否则全量模式会先清空再重写——那等于改动源表，绝对禁止。
+  const tgtId = $('sameTable').value;
+  if (!tgtId) throw new Error('安全拦截：未选择目标数据表');
+  if (tgtId === state.source?.tableId) throw new Error('安全拦截：目标不能是当前源数据表（同步绝不改动源表）');
+  const t = await state.bitable.base.getTableById(tgtId);
+  if (t && t.id && t.id === state.source?.tableId) throw new Error('安全拦截：目标不能是当前源数据表（同步绝不改动源表）');
   cnt.add = cnt.upd = cnt.del = 0;
   const delMissing = state.syncMode === 'incr' && $('delMissing').checked;
 
@@ -390,6 +396,10 @@ async function runSame(payload) {
 async function runCrossBitable(payload) {
   const app = $('tgtAppToken').value.trim();
   const tbl = $('tgtTableId').value.trim();
+  // 引擎内最后一道闸：目标 Table ID 不得等于源数据表 ID（tableId 全局唯一，
+  // 若填回源表 ID，所有写操作都会命中源表——绝对禁止）。
+  if (!app || !tbl) throw new Error('安全拦截：目标多维表未配置完整');
+  if (tbl === state.source?.tableId) throw new Error('安全拦截：目标不能是当前源数据表（同步绝不改动源表）');
   cnt.add = cnt.upd = cnt.del = 0;
   const delMissing = state.syncMode === 'incr' && $('delMissing').checked;
 
@@ -453,6 +463,9 @@ async function runCrossBitable(payload) {
 async function runCrossSheet(payload) {
   const token = $('tgtSheetToken').value.trim();
   const sheetId = $('tgtSheetId').value.trim() || '0';
+  // 引擎内最后一道闸：电子表格与多维表是不同文档类型，不存在同文档风险，
+  // 但 token 未填时路径会拼出非法请求，统一拦截。
+  if (!token) throw new Error('安全拦截：目标电子表格未配置完整');
   cnt.add = cnt.upd = cnt.del = 0;
   const delMissing = state.syncMode === 'incr' && $('delMissing').checked;
 
@@ -521,7 +534,11 @@ function genColumns(n) {
 function lastCol(n) { return genColumns(n).pop(); }
 // 列字母 ⇄ 序号（支持 AA、AB…）
 function colToNum(col) { let n = 0; for (const c of col) n = n * 26 + (c.charCodeAt(0) - 64); return n; }
-function numToCol(n) { let s = ''; while (n > 0) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26); } return s; }
+function numToCol(n) {
+  // 防御：非法列号（如空映射归约出的 Infinity）直接报错，绝不允许进入死循环
+  if (!Number.isFinite(n) || n < 1) throw new Error('非法列号：请先建立至少一个字段映射');
+  let s = ''; while (n > 0) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26); } return s;
+}
 function minColLetter(cols) { return numToCol(cols.reduce((m, c) => Math.min(m, colToNum(c)), Infinity)); }
 function maxColLetter(cols) { return numToCol(cols.reduce((m, c) => Math.max(m, colToNum(c)), 0)); }
 function escapeHtml(s) {
