@@ -14,6 +14,7 @@ const state = {
   syncMode: 'full',
   token: null,
   tokenExpire: 0,
+  running: false,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -119,6 +120,7 @@ async function loadSource() {
   } while (res.hasMore);
 
   state.source = {
+    tableId: table.id,
     tableName: table.name || '(当前表)',
     viewName: view?.name || '(当前视图)',
     fields: fieldMeta,
@@ -142,6 +144,7 @@ async function ensureTargetFields() {
   if (state.target.mode === 'same') {
     const id = $('sameTable').value;
     if (!id) throw new Error('请选择目标数据表');
+    if (id === state.source?.tableId) throw new Error('目标不能是当前源数据表：同步绝不改动源表');
     const t = await state.bitable.base.getTableById(id);
     const fs = (await t.getFields()) || [];
     state.targetFields = fs.map((f) => ({ id: f.id, name: f.name }));
@@ -149,6 +152,7 @@ async function ensureTargetFields() {
     const app = $('tgtAppToken').value.trim();
     const tbl = $('tgtTableId').value.trim();
     if (!app || !tbl) throw new Error('请填写目标多维表 App Token 与 Table ID');
+    if (tbl === state.source?.tableId) throw new Error('目标不能与源数据表相同：同步绝不改动源表');
     const fs = [];
     let pageToken;
     let d;
@@ -266,11 +270,56 @@ function toSheetValue(v) {
   return v;
 }
 
+// ---------------- 同步门禁与源表保护 ----------------
+// 目标是否已配置完整（用于「开始同步」按钮的可用态）。
+function targetReady() {
+  if (!state.source) return false;
+  if (state.target.mode === 'same') return !!$('sameTable').value;
+  const cred = $('appId').value.trim() && $('appSecret').value.trim();
+  if (state.target.type === 'bitable') {
+    return !!(cred && $('tgtAppToken').value.trim() && $('tgtTableId').value.trim());
+  }
+  return !!(cred && $('tgtSheetToken').value.trim());
+}
+
+// 硬校验：目标没配好不允许开始同步；目标=源表本身直接拒绝（同步绝不改动源表）。
+function validateTarget() {
+  if (!state.source) throw new Error('源数据尚未加载完成');
+  if (state.target.mode === 'same') {
+    const id = $('sameTable').value;
+    if (!id) throw new Error('请先选择目标数据表');
+    if (id === state.source.tableId) throw new Error('目标不能是当前源数据表：同步绝不改动源表');
+  } else if (state.target.type === 'bitable') {
+    if (!$('appId').value.trim() || !$('appSecret').value.trim()) throw new Error('请先填写 App ID 与 App Secret');
+    const tbl = $('tgtTableId').value.trim();
+    if (!$('tgtAppToken').value.trim() || !tbl) throw new Error('请先填写目标多维表 App Token 与 Table ID');
+    if (tbl === state.source.tableId) throw new Error('目标不能与源数据表相同：同步绝不改动源表');
+  } else {
+    if (!$('appId').value.trim() || !$('appSecret').value.trim()) throw new Error('请先填写 App ID 与 App Secret');
+    if (!$('tgtSheetToken').value.trim()) throw new Error('请先填写目标电子表格的 Spreadsheet Token');
+  }
+}
+
+// 根据目标配置完整度实时启用/禁用「开始同步」，并给出缺口提示。
+function updateRunBtn() {
+  if (!state.bitable || !state.source) return;   // 非飞书环境 / 源未加载完：保持现状
+  const ok = targetReady() && !state.running;
+  $('runBtn').disabled = !ok;
+  const hint = $('runHint');
+  if (hint) {
+    hint.textContent = ok ? '' : (state.target.mode === 'same'
+      ? '请先选择目标数据表（当前源数据表已排除）'
+      : '请先填写 App ID / App Secret 与目标表格信息');
+  }
+}
+
 async function runSync() {
   const btn = $('runBtn');
   btn.disabled = true;
+  state.running = true;
   $('result').classList.add('hidden');
   try {
+    validateTarget();              // 门禁：目标未配好 / 目标=源表时拒绝执行
     const payload = buildPayload();
     const total = payload.length;
     if (!total) throw new Error('没有可同步的数据（检查映射与目标字段）');
@@ -290,7 +339,8 @@ async function runSync() {
     showResult('❌ 同步失败：' + e.message, true);
     setStatus('同步失败', 'err');
   } finally {
-    btn.disabled = false;
+    state.running = false;
+    updateRunBtn();
   }
 }
 
@@ -428,8 +478,8 @@ async function runCrossSheet(payload) {
     return;
   }
 
-  // 增量：读取现有表头与数据，按主键（源字段名）所在列匹配
-  const readRange = await api('GET', `/sheets/v2/spreadsheets/${token}/values/${sheetId}!${firstCol}1:${lastColL}1000`);
+  // 增量：读取现有表头与数据，按主键（源字段名）所在列匹配（读 5000 行，超出部分极罕见）
+  const readRange = await api('GET', `/sheets/v2/spreadsheets/${token}/values/${sheetId}!${firstCol}1:${lastColL}5000`);
   const grid = (readRange?.valueRange?.values) || [];
   const existingHeader = grid[0] || [];
   const keyColIdx = existingHeader.indexOf(state.keyField); // 源字段名在表头中的位置
@@ -478,6 +528,23 @@ function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// ---------------- 凭证本地持久化（localStorage，仅本机） ----------------
+const LS_KEY = 'viewsync_creds_v1';
+const CREDS_IDS = ['appId', 'appSecret', 'tgtAppToken', 'tgtTableId', 'tgtSheetToken', 'tgtSheetId'];
+function loadCreds() {
+  try {
+    const j = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
+    for (const id of CREDS_IDS) if (j[id]) $(id).value = j[id];
+  } catch { /* 数据损坏则忽略 */ }
+}
+function saveCreds() {
+  try {
+    const j = {};
+    for (const id of CREDS_IDS) j[id] = $(id).value;
+    localStorage.setItem(LS_KEY, JSON.stringify(j));
+  } catch { /* 隐私模式等写入失败不影响功能 */ }
+}
+
 // ---------------- UI 事件绑定 ----------------
 function bindUI() {
   $('modeSeg').addEventListener('click', (e) => {
@@ -510,15 +577,22 @@ function bindUI() {
   // 跨文件：输入框失焦时尝试预载目标字段（用于自动匹配建议）
   ['tgtAppToken', 'tgtTableId', 'tgtSheetToken', 'tgtSheetId'].forEach((id) =>
     $(id).addEventListener('blur', () => { if (state.target.mode === 'cross') refreshTargetFieldsUI(); }));
+  // 任意输入：实时刷新「开始同步」可用态 + 持久化凭证（仅本机 localStorage）
+  document.addEventListener('input', () => { updateRunBtn(); saveCreds(); });
+  document.addEventListener('change', () => { updateRunBtn(); saveCreds(); });
 }
 
 async function refreshTargetFieldsUI() {
   try {
     if (state.target.mode === 'same') {
-      // 填充本文件表清单（排除当前表可选，这里列出全部）
+      // 填充本文件表清单：**排除当前源数据表**——目标=源表会覆盖源数据，绝不放行
       const list = await state.bitable.base.getTableList();
       const tables = list.tableList || list.tables || (Array.isArray(list) ? list : []);
-      $('sameTable').innerHTML = tables.map((t) => `<option value="${t.id}">${escapeHtml(t.name)}</option>`).join('');
+      const cur = state.source?.tableId;
+      const selectable = tables.filter((t) => t.id !== cur);
+      $('sameTable').innerHTML = selectable.length
+        ? selectable.map((t) => `<option value="${t.id}">${escapeHtml(t.name)}</option>`).join('')
+        : '<option value="">（本多维表没有其他数据表，请改用跨文件模式）</option>';
       await ensureTargetFields();
     } else if (state.target.mode === 'cross' && state.target.type === 'sheet') {
       await ensureTargetFields();
@@ -526,6 +600,8 @@ async function refreshTargetFieldsUI() {
     buildMappingUI();
   } catch (e) {
     log('加载目标字段失败：' + e.message, 'err');
+  } finally {
+    updateRunBtn();
   }
 }
 
@@ -543,10 +619,11 @@ async function init() {
   }
   try {
     await state.bitable.base;          // 等待插件上下文就绪
+    loadCreds();                       // 回填上次保存的凭证与目标信息（本机 localStorage）
     await loadSource();
     await refreshTargetFieldsUI();
+    updateRunBtn();                    // 「开始同步」按目标配置完整度启用
     setStatus('已连接', 'ok');
-    $('runBtn').disabled = false;
   } catch (e) {
     setStatus('连接失败', 'err');
     log('初始化失败：' + e.message, 'err');
