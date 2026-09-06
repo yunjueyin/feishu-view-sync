@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>视图同步插件 · 飞书多维表</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="top">
+      <div class="brand">
+        <div class="logo">⇄</div>
+        <div>
+          <h1>视图同步</h1>
+          <p>把当前视图同步到其他表格</p>
+        </div>
+      </div>
+      <div id="status" class="status">正在连接多维表…</div>
+    </header>
+
+    <!-- 源：当前视图 -->
+    <section class="card" id="srcCard">
+      <div class="card-head">
+        <span class="badge badge-src">源</span>
+        <h2>当前视图（自动读取）</h2>
+      </div>
+      <div id="srcBody" class="muted">加载中…</div>
+    </section>
+
+    <!-- 目标 -->
+    <section class="card" id="tgtCard">
+      <div class="card-head">
+        <span class="badge badge-tgt">目标</span>
+        <h2>同步到哪里</h2>
+      </div>
+
+      <div class="seg" id="modeSeg">
+        <button class="seg-btn active" data-mode="same">同文件（免密钥）</button>
+        <button class="seg-btn" data-mode="cross">跨文件 / 电子表格（密钥）</button>
+      </div>
+
+      <!-- 同文件模式 -->
+      <div id="sameBox" class="box">
+        <label class="lbl">选择本多维表中的目标数据表</label>
+        <select id="sameTable" class="input"></select>
+        <p class="hint">目标表与当前表在同一多维表里，使用插件身份直写，无需任何密钥。</p>
+      </div>
+
+      <!-- 跨文件模式 -->
+      <div id="crossBox" class="box hidden">
+        <div class="seg seg-sm" id="typeSeg">
+          <button class="seg-btn active" data-type="bitable">飞书多维表</button>
+          <button class="seg-btn" data-type="sheet">飞书电子表格</button>
+        </div>
+
+        <div class="grid">
+          <div class="field">
+            <label class="lbl">App ID</label>
+            <input id="appId" class="input" placeholder="cli_xxxxxxxx" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label class="lbl">App Secret</label>
+            <input id="appSecret" class="input" type="password" placeholder="********" autocomplete="off" />
+          </div>
+        </div>
+
+        <div id="bitableInputs" class="grid">
+          <div class="field">
+            <label class="lbl">目标多维表 App Token</label>
+            <input id="tgtAppToken" class="input" placeholder="bascnxxxxxxxx" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label class="lbl">目标数据表 Table ID</label>
+            <input id="tgtTableId" class="input" placeholder="tblxxxxxxxx" autocomplete="off" />
+          </div>
+        </div>
+
+        <div id="sheetInputs" class="grid hidden">
+          <div class="field">
+            <label class="lbl">电子表格 Spreadsheet Token</label>
+            <input id="tgtSheetToken" class="input" placeholder="shtcnxxxxxxxx" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label class="lbl">工作表 Sheet ID</label>
+            <input id="tgtSheetId" class="input" placeholder="如 0（或 sheet 名称）" autocomplete="off" />
+          </div>
+        </div>
+        <p class="hint">跨文件 / 电子表格写入需要应用身份令牌。凭证仅保存在本机浏览器（localStorage），不会上传。</p>
+      </div>
+    </section>
+
+    <!-- 字段映射 -->
+    <section class="card" id="mapCard">
+      <div class="card-head">
+        <span class="badge badge-map">映射</span>
+        <h2>字段映射</h2>
+        <button id="addMap" class="btn btn-ghost btn-sm">+ 添加</button>
+        <button id="autoMap" class="btn btn-ghost btn-sm">自动匹配同名</button>
+      </div>
+      <p class="hint">把源字段写到目标的哪个字段 / 列。未映射的字段不会被同步。</p>
+      <div class="key-row">
+        <label class="lbl">增量主键（用于匹配已存在记录）</label>
+        <select id="keyField" class="input input-sm"></select>
+      </div>
+      <div id="mapList" class="map-list"></div>
+    </section>
+
+    <!-- 选项 + 执行 -->
+    <section class="card" id="runCard">
+      <div class="card-head">
+        <span class="badge badge-run">执行</span>
+        <h2>同步方式</h2>
+      </div>
+      <div class="seg seg-sm" id="modeSyncSeg">
+        <button class="seg-btn active" data-sync="full">全量覆盖</button>
+        <button class="seg-btn" data-sync="incr">增量（按主键）</button>
+      </div>
+      <label class="check"><input type="checkbox" id="delMissing" /> 增量时删除目标中「源已不存在」的行</label>
+
+      <div class="actions">
+        <button id="runBtn" class="btn btn-primary">开始同步</button>
+        <span id="progressWrap" class="progress-wrap hidden">
+          <span id="progressBar" class="progress-bar"></span>
+        </span>
+      </div>
+
+      <div id="result" class="result hidden"></div>
+      <div id="log" class="log"></div>
+    </section>
+
+    <footer class="foot">飞书多维表「自定义插件」· 部署本页网址即可在多维表中加载</footer>
+  </div>
+
+  <!-- 缓存破坏：每次加载强制拉取最新 app.js（与你另一个飞书插件一致的部署方式） -->
+  <script type="module">
+    import('./app.js?v=' + Date.now());
+  </script>
+</body>
+</html>
