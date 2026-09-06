@@ -119,7 +119,8 @@
       <label class="check"><input type="checkbox" id="delMissing" /> 增量时删除目标中「源已不存在」的行</label>
 
       <div class="actions">
-        <button id="runBtn" class="btn btn-primary">开始同步</button>
+        <button id="runBtn" class="btn btn-primary" disabled>开始同步</button>
+        <span id="runHint" class="hint"></span>
         <span id="progressWrap" class="progress-wrap hidden">
           <span id="progressBar" class="progress-bar"></span>
         </span>
